@@ -18,6 +18,9 @@ public struct OIDCDiscovery: Codable, Sendable {
     /// The UserInfo endpoint, when the provider exposes one.
     public let userinfoEndpoint: URL?
 
+    /// The token introspection endpoint, when the provider exposes one.
+    public let introspectionEndpoint: URL?
+
     /// The JWKS URI.
     public let jwksURI: URL
 
@@ -47,6 +50,7 @@ public struct OIDCDiscovery: Codable, Sendable {
         case authorizationEndpoint = "authorization_endpoint"
         case tokenEndpoint = "token_endpoint"
         case userinfoEndpoint = "userinfo_endpoint"
+        case introspectionEndpoint = "introspection_endpoint"
         case jwksURI = "jwks_uri"
         case endSessionEndpoint = "end_session_endpoint"
         case scopesSupported = "scopes_supported"
@@ -63,6 +67,7 @@ public struct OIDCDiscovery: Codable, Sendable {
         authorizationEndpoint: URL,
         tokenEndpoint: URL,
         userinfoEndpoint: URL? = nil,
+        introspectionEndpoint: URL? = nil,
         jwksURI: URL,
         endSessionEndpoint: URL? = nil,
         scopesSupported: [String]? = nil,
@@ -76,6 +81,7 @@ public struct OIDCDiscovery: Codable, Sendable {
         self.authorizationEndpoint = authorizationEndpoint
         self.tokenEndpoint = tokenEndpoint
         self.userinfoEndpoint = userinfoEndpoint
+        self.introspectionEndpoint = introspectionEndpoint
         self.jwksURI = jwksURI
         self.endSessionEndpoint = endSessionEndpoint
         self.scopesSupported = scopesSupported

@@ -68,6 +68,27 @@ public enum OIDCError: Error, Sendable, Equatable {
 
     /// The redirect target is not allowed.
     case invalidRedirect(String)
+
+    /// The access token is invalid.
+    case invalidAccessToken(String)
+
+    /// The introspection endpoint reported the token as inactive.
+    case inactiveAccessToken
+
+    /// The introspection request failed.
+    case introspectionFailed(statusCode: Int, body: String)
+
+    /// The provider does not expose an introspection endpoint.
+    case missingIntrospectionEndpoint
+
+    /// The introspection client credentials are missing.
+    case missingIntrospectionCredentials
+
+    /// The access token is missing a required scope.
+    case insufficientScope(required: String, granted: Set<String>)
+
+    /// The access token format is not supported.
+    case unsupportedTokenFormat
 }
 
 extension OIDCError: LocalizedError {
@@ -115,6 +136,20 @@ extension OIDCError: LocalizedError {
             return "OIDC requires SessionsMiddleware."
         case .invalidRedirect(let value):
             return "Invalid OIDC redirect target: \(value)"
+        case .invalidAccessToken(let reason):
+            return "Invalid OIDC access token: \(reason)"
+        case .inactiveAccessToken:
+            return "The OIDC access token is inactive."
+        case .introspectionFailed(let statusCode, let body):
+            return "OIDC introspection failed (\(statusCode)): \(body)"
+        case .missingIntrospectionEndpoint:
+            return "The OIDC provider does not expose an introspection endpoint."
+        case .missingIntrospectionCredentials:
+            return "The OIDC introspection client credentials are missing."
+        case .insufficientScope(let required, let granted):
+            return "The OIDC access token is missing the \(required) scope. Granted: \(granted.sorted().joined(separator: " "))"
+        case .unsupportedTokenFormat:
+            return "The OIDC access token format is not supported."
         }
     }
 }

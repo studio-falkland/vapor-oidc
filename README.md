@@ -118,6 +118,65 @@ protected.get("me") { request in
 }
 ```
 
+## MCP / resource server
+
+When your Vapor app is an MCP server (or any OAuth 2.1 resource server), clients
+send a bearer token instead of a session cookie. Create a separate
+`OIDCResourceServer`:
+
+```swift
+let resource = app.oidcResourceServer(
+    configuration: .init(
+        issuer: URL(string: "https://accounts.example.com")!,
+        audience: "https://mcp.example.com",
+        requiredScopes: ["mcp:tools"],
+        tokenValidation: .automatic,
+        introspectionClientID: "mcp-server",
+        introspectionClientSecret: "..."
+    ),
+    resolver: .init { token, request in
+        try await User.find(by: token.subject, on: request)
+    }
+)
+
+let mcp = app.grouped(resource.bearerAuthenticator)
+mcp.get("tools") { request in
+    let user = try request.auth.require(User.self)
+    return try await tools(for: user)
+}
+```
+
+The holder registers `/.well-known/oauth-protected-resource` automatically when
+you register it:
+
+```swift
+try await app.register(collection: resource)
+```
+
+`tokenValidation` can be `.jwt`, `.introspection`, or `.automatic`. Automatic
+validates JWTs with the provider's JWKS and introspects opaque tokens. Both
+Authentik and Zitadel issue JWT access tokens and expose an introspection
+endpoint.
+
+Per-route scopes:
+
+```swift
+let tools = mcp.grouped(OIDCScopeMiddleware("mcp:tools"))
+tools.get("tools") { request in
+    let user = try request.auth.require(User.self)
+    ...
+}
+```
+
+Or inside a handler:
+
+```swift
+try request.requireScope("mcp:tools")
+```
+
+Missing or invalid tokens return `401` with a `WWW-Authenticate` challenge that
+points at the protected-resource metadata. Insufficient scopes return `403`.
+
 ## Configuration with Swift Configuration
 
 Vapor 5 exposes a `ConfigReader` on the application. The default reader reads

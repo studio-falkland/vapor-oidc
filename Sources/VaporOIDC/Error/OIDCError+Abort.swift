@@ -9,13 +9,17 @@ extension OIDCError: AbortError {
         case .invalidState, .missingCode, .invalidRedirect:
             return .badRequest
         case .authorizationFailed, .nonceMismatch, .audienceMismatch, .tokenExpired,
-             .invalidIDToken, .userInfoSubjectMismatch, .unsupportedAlgorithm:
+             .invalidIDToken, .userInfoSubjectMismatch, .unsupportedAlgorithm,
+             .invalidAccessToken, .inactiveAccessToken, .unsupportedTokenFormat:
             return .unauthorized
+        case .insufficientScope:
+            return .forbidden
         case .discoveryFailed, .tokenExchangeFailed, .userInfoFailed,
-             .insecureEndpoint, .networkError, .missingJWKSKey:
+             .insecureEndpoint, .networkError, .missingJWKSKey, .introspectionFailed:
             return .badGateway
         case .invalidDiscoveryDocument, .issuerMismatch, .missingIDToken,
-             .pkceUnsupported, .sessionUnavailable:
+             .pkceUnsupported, .sessionUnavailable, .missingIntrospectionEndpoint,
+             .missingIntrospectionCredentials:
             return .internalServerError
         }
     }

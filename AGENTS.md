@@ -34,6 +34,9 @@ normative specs win:
 - State, nonce, PKCE verifier, and `OIDCSubject` live in Vapor sessions.
 - The ID token is stored only for RP-initiated logout, behind
   `storeIDTokenForLogout`.
+- `OIDCResourceServer<User>` is the OAuth 2.1 resource-server surface. It
+  validates bearer tokens (JWT or introspection), resolves the user, and serves
+  `/.well-known/oauth-protected-resource`.
 
 ## Security invariants
 
@@ -61,6 +64,10 @@ normative specs win:
   must persist it. Validate `iss` and `aud` if an ID Token is returned on
   refresh; the app should verify the returned subject has not changed.
 - RP-Initiated Logout 1.0 for logout.
+- Resource-server tokens: validate `iss`, `aud`, `exp`, `nbf`, and the
+  signature; reject `none`/HMAC; enforce scopes; never accept ID tokens as
+  access tokens.
+- Introspection results are cached briefly and bounded by the token expiry.
 
 ## Development practices
 
@@ -81,8 +88,8 @@ normative specs win:
 ## Scope boundaries
 
 v1 implements the Authorization Code Flow with PKCE `S256`, `state`, `nonce`,
-discovery, JWKS, ID Token validation, UserInfo, a manual refresh helper, and
-RP-initiated logout.
+discovery, JWKS, ID Token validation, UserInfo, a manual refresh helper,
+RP-initiated logout, and an OAuth 2.1 resource-server surface for bearer tokens.
 
 Out of scope: implicit/hybrid flows, ROPC, `max_age`/`auth_time`/`acr`,
 `prompt=none`, the `claims` parameter, JAR/PAR, DPoP/mTLS, back-channel and
