@@ -44,11 +44,21 @@ public struct OIDCOptions: Sendable {
     /// Returns a safe redirect target.
     ///
     /// Relative paths are allowed. Absolute URLs are allowed only when their
-    /// origin is in ``allowedRedirectOrigins``. Everything else falls back to
+    /// origin is in ``allowedRedirectOrigins``. Values containing backslashes
+    /// or control characters are rejected because browsers normalize them into
+    /// protocol-relative URLs. Everything else falls back to
     /// ``defaultRedirectAfterLogin``.
     public func sanitizeRedirect(_ value: String?) -> String {
         // Fall back when no target was supplied.
         guard let value, !value.isEmpty else {
+            return self.defaultRedirectAfterLogin
+        }
+
+        // Reject characters that browsers normalize into an authority
+        // separator. A backslash is treated as "/" and C0 controls are
+        // stripped, so "/\evil.example" and "/\t/evil.example" would both
+        // become protocol-relative URLs in the browser.
+        guard !value.unicodeScalars.contains(where: Self.isUnsafeRedirectScalar) else {
             return self.defaultRedirectAfterLogin
         }
 
@@ -70,5 +80,11 @@ public struct OIDCOptions: Sendable {
             return self.defaultRedirectAfterLogin
         }
         return value
+    }
+
+    /// Returns whether a scalar could be normalized into an authority separator.
+    private static func isUnsafeRedirectScalar(_ scalar: Unicode.Scalar) -> Bool {
+        // Browsers map "\" to "/" and drop C0 controls and DEL from URLs.
+        scalar == "\\" || scalar.value < 0x20 || scalar.value == 0x7F
     }
 }
