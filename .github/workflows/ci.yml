@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-macos:
+    name: Build & Test (macOS)
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Test
+        run: swift test --configuration debug 2>&1
+
+  build-linux:
+    name: Build & Test (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.4.2
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build
+        run: swift build --configuration debug 2>&1
+
+      - name: Test
+        run: swift test --configuration debug 2>&1
