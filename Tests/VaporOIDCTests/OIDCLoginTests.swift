@@ -136,4 +136,42 @@ struct OIDCLoginTests {
             }
         }
     }
+
+    @Test
+    func callbackRejectsUnsafeRedirectTarget() async throws {
+        let oidc = self.makeOIDC()
+
+        try await withApp { app in
+            app.middleware.use(app.sessionsMiddleware)
+            app.middleware.use(oidc.sessionAuthenticator)
+            try await app.grouped("auth").register(collection: oidc)
+
+            try await app.testing { client in
+                // "/%5Cevil.example" decodes to "/\\evil.example", which
+                // browsers would follow as a protocol-relative redirect.
+                let login = try await client.get(
+                    "auth/login?redirect=/%5Cevil.example"
+                )
+                let cookies = try #require(login.headers.setCookie)
+                let cookie = try #require(cookies["vapor-session"])
+                let location = try #require(login.headers[.location])
+                let state = try #require(
+                    URLComponents(string: location)?
+                        .queryItems?
+                        .first(where: { $0.name == "state" })?
+                        .value
+                )
+
+                var headers = HTTPFields()
+                headers[.cookie] = "vapor-session=\(cookie.string)"
+                let callback = try await client.get(
+                    "auth/callback?code=code&state=\(state)",
+                    headers: headers
+                )
+
+                #expect(callback.status == .seeOther)
+                #expect(callback.headers[.location] == "/")
+            }
+        }
+    }
 }
