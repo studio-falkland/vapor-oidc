@@ -13,11 +13,8 @@ public actor OIDCClient: OIDCProvider {
 
     private let httpClient: any OIDCHTTPClient
     private let logger: Logger
-
-    private var cachedDiscovery: OIDCDiscovery?
-    private var cachedJWKS: JWKS?
-    private var jwksFetchedAt: Date?
-    private var keys = JWTKeyCollection()
+    private let discoveryLoader: OIDCDiscoveryLoader
+    private let jwksLoader: OIDCJWKSLoader
 
     /// Creates a client.
     public init(
@@ -28,58 +25,26 @@ public actor OIDCClient: OIDCProvider {
         self.configuration = configuration
         self.httpClient = httpClient
         self.logger = logger
+
+        let discoveryLoader = OIDCDiscoveryLoader(
+            issuer: configuration.issuer,
+            discoveryURL: configuration.discoveryURL,
+            requireHTTPS: configuration.requireHTTPS,
+            httpClient: httpClient,
+            logger: logger
+        )
+        self.discoveryLoader = discoveryLoader
+        self.jwksLoader = OIDCJWKSLoader(
+            discoveryLoader: discoveryLoader,
+            cacheDuration: configuration.jwksCacheDuration,
+            requireHTTPS: configuration.requireHTTPS,
+            httpClient: httpClient,
+            logger: logger
+        )
     }
 
     public func discovery() async throws -> OIDCDiscovery {
-        // Reuse the cached document.
-        if let cachedDiscovery {
-            return cachedDiscovery
-        }
-
-        // Build the discovery URL and require HTTPS.
-        let url = self.configuration.discoveryURL
-            ?? self.configuration.issuer.appendingPathComponent(".well-known/openid-configuration")
-        try self.validateHTTPS(url)
-
-        // Fetch and decode the document.
-        let response = try await self.httpClient.send(
-            OIDCHTTPRequest(method: "GET", url: url)
-        )
-        guard response.statusCode == 200 else {
-            throw OIDCError.discoveryFailed(
-                statusCode: response.statusCode,
-                body: String(decoding: response.body, as: UTF8.self)
-            )
-        }
-
-        let discovery: OIDCDiscovery
-        do {
-            discovery = try JSONDecoder().decode(OIDCDiscovery.self, from: response.body)
-        } catch {
-            throw OIDCError.invalidDiscoveryDocument(String(describing: error))
-        }
-
-        // Require the document to describe the configured issuer.
-        guard discovery.issuer == self.configuration.issuer.absoluteString else {
-            throw OIDCError.issuerMismatch(
-                expected: self.configuration.issuer.absoluteString,
-                actual: discovery.issuer
-            )
-        }
-
-        // Require every endpoint to use HTTPS.
-        try self.validateHTTPS(discovery.authorizationEndpoint)
-        try self.validateHTTPS(discovery.tokenEndpoint)
-        try self.validateHTTPS(discovery.jwksURI)
-        if let userinfoEndpoint = discovery.userinfoEndpoint {
-            try self.validateHTTPS(userinfoEndpoint)
-        }
-        if let endSessionEndpoint = discovery.endSessionEndpoint {
-            try self.validateHTTPS(endSessionEndpoint)
-        }
-
-        self.cachedDiscovery = discovery
-        return discovery
+        try await self.discoveryLoader.load()
     }
 
     public func authorizationURL(
@@ -229,10 +194,10 @@ public actor OIDCClient: OIDCProvider {
             return self.identity(from: claims, userInfo: userInfo, tokenResponse: tokenResponse)
         }
 
+        // Otherwise fall back to UserInfo for the subject.
         guard self.configuration.fetchUserInfo else {
             throw OIDCError.missingIDToken
         }
-
         let userInfo = try await self.userInfo(accessToken: tokenResponse.accessToken)
         guard let subject = userInfo.string("sub") else {
             throw OIDCError.userInfoFailed(
@@ -334,34 +299,19 @@ public actor OIDCClient: OIDCProvider {
         var body = body
 
         // Apply the configured client authentication method.
-        switch self.configuration.tokenEndpointAuthenticationMethod {
-        case .clientSecretBasic:
-            guard let secret = self.configuration.clientSecret else {
-                throw OIDCError.tokenExchangeFailed(
-                    statusCode: 0,
-                    body: "The client secret is missing."
-                )
-            }
-            let credentials = "\(self.configuration.clientID):\(secret)"
-            let encoded = Data(credentials.utf8).base64EncodedString()
-            headers["Authorization"] = "Basic \(encoded)"
-        case .clientSecretPost:
-            if let secret = self.configuration.clientSecret {
-                body["client_secret"] = secret
-            }
-        case .none:
-            break
-        }
-
-        let encodedBody = body
-            .map { "\(Self.formEncode($0.key))=\(Self.formEncode($0.value))" }
-            .joined(separator: "&")
+        try OIDCFormRequest.applyClientAuthentication(
+            headers: &headers,
+            body: &body,
+            clientID: self.configuration.clientID,
+            clientSecret: self.configuration.clientSecret,
+            method: self.configuration.tokenEndpointAuthenticationMethod
+        )
 
         return OIDCHTTPRequest(
             method: "POST",
             url: discovery.tokenEndpoint,
             headers: headers,
-            body: Data(encodedBody.utf8)
+            body: OIDCFormRequest.encode(body)
         )
     }
 
@@ -372,74 +322,60 @@ public actor OIDCClient: OIDCProvider {
         requireNonce: Bool = true
     ) async throws -> IDTokenClaims {
         // Decode the header and reject unsafe algorithms and key references.
-        let header = try Self.decodeHeader(token)
-        let algorithm = header.alg.lowercased()
+        let header = try OIDCJWTHeader.decode(token)
+        try header.validate(allowedAlgorithms: self.configuration.allowedIDTokenAlgorithms)
 
-        guard algorithm != "none", !algorithm.hasPrefix("hs") else {
-            throw OIDCError.unsupportedAlgorithm(header.alg)
-        }
-        guard self.configuration.allowedIDTokenAlgorithms.contains(header.alg) else {
-            throw OIDCError.unsupportedAlgorithm(header.alg)
-        }
-        guard header.x5u == nil, header.x5c == nil, header.jku == nil, header.jwk == nil else {
-            throw OIDCError.invalidIDToken("Unsupported JOSE header parameters.")
-        }
-
-        try await self.loadJWKSIfNeeded()
-
-        if header.kid == nil, let jwks = self.cachedJWKS, jwks.keys.count > 1 {
+        // Require a kid when the JWKS has multiple keys.
+        if header.kid == nil, try await self.jwksLoader.requiresKeyIdentifier() {
             throw OIDCError.missingJWKSKey(kid: "<missing>")
         }
 
+        // Verify the signature, refreshing the JWKS once on failure.
         let claims: IDTokenClaims
         do {
-            claims = try await self.keys.verify(token, as: IDTokenClaims.self)
+            claims = try await self.jwksLoader.verify(token, as: IDTokenClaims.self)
         } catch {
-            try await self.refreshJWKS()
-            do {
-                claims = try await self.keys.verify(token, as: IDTokenClaims.self)
-            } catch {
-                throw OIDCError.invalidIDToken(String(describing: error))
-            }
+            throw OIDCError.invalidIDToken(String(describing: error))
         }
 
-        guard claims.issuer.value == self.configuration.issuer.absoluteString else {
-            throw OIDCError.issuerMismatch(
-                expected: self.configuration.issuer.absoluteString,
-                actual: claims.issuer.value
-            )
-        }
-        guard claims.audience.value.contains(self.configuration.clientID) else {
-            throw OIDCError.audienceMismatch
-        }
-        let trustedAudiences = self.configuration.trustedAudiences
-            .union([self.configuration.clientID])
-        guard claims.audience.value.allSatisfy({ trustedAudiences.contains($0) }) else {
-            throw OIDCError.audienceMismatch
-        }
+        // Validate the issuer and audience.
+        try OIDCClaimValidation.validateIssuer(
+            claims.issuer.value,
+            expected: self.configuration.issuer.absoluteString
+        )
+        try OIDCClaimValidation.validateAudience(
+            claims.audience.value,
+            expected: self.configuration.clientID,
+            trusted: self.configuration.trustedAudiences
+        )
         if let authorizedParty = claims.authorizedParty,
            authorizedParty != self.configuration.clientID {
             throw OIDCError.audienceMismatch
         }
 
-        let now = Date()
+        // Validate the time-based claims with clock skew.
         let skew = self.configuration.clockSkew
-        guard claims.expiration.value > now.addingTimeInterval(-skew) else {
-            throw OIDCError.tokenExpired
-        }
-        if let issuedAt = claims.issuedAt,
-           issuedAt.value > now.addingTimeInterval(skew) {
-            throw OIDCError.invalidIDToken("The ID Token was issued in the future.")
-        }
-        if let notBefore = claims.notBefore,
-           notBefore.value > now.addingTimeInterval(skew) {
-            throw OIDCError.invalidIDToken("The ID Token is not valid yet.")
-        }
+        try OIDCClaimValidation.validateExpiration(
+            claims.expiration.value,
+            clockSkew: skew
+        )
+        try OIDCClaimValidation.validateIssuedAt(
+            claims.issuedAt?.value,
+            clockSkew: skew
+        )
+        try OIDCClaimValidation.validateNotBefore(
+            claims.notBefore?.value,
+            clockSkew: skew
+        )
+
+        // Validate the nonce when the flow requires it.
         if requireNonce && self.configuration.useNonce {
             guard let nonce, claims.nonce == nonce else {
                 throw OIDCError.nonceMismatch
             }
         }
+
+        // Validate at_hash when the provider included it.
         if let atHash = claims.accessTokenHash {
             guard Self.verifyAccessTokenHash(
                 atHash,
@@ -451,43 +387,6 @@ public actor OIDCClient: OIDCProvider {
         }
 
         return claims
-    }
-
-    private func loadJWKSIfNeeded() async throws {
-        // Reuse the cached JWKS until it expires.
-        if let jwksFetchedAt,
-           Date().timeIntervalSince(jwksFetchedAt) < self.configuration.jwksCacheDuration {
-            return
-        }
-        try await self.refreshJWKS()
-    }
-
-    private func refreshJWKS() async throws {
-        // Fetch the JWKS from the provider.
-        let discovery = try await self.discovery()
-        let response = try await self.httpClient.send(
-            OIDCHTTPRequest(method: "GET", url: discovery.jwksURI)
-        )
-        guard response.statusCode == 200 else {
-            throw OIDCError.discoveryFailed(
-                statusCode: response.statusCode,
-                body: String(decoding: response.body, as: UTF8.self)
-            )
-        }
-
-        // Decode the keys and replace the key collection.
-        let jwks: JWKS
-        do {
-            jwks = try JSONDecoder().decode(JWKS.self, from: response.body)
-        } catch {
-            throw OIDCError.invalidDiscoveryDocument("Unable to decode the JWKS: \(error)")
-        }
-
-        let keys = JWTKeyCollection()
-        try await keys.add(jwks: jwks)
-        self.keys = keys
-        self.cachedJWKS = jwks
-        self.jwksFetchedAt = Date()
     }
 
     private func fetchUserInfoIfNeeded(
@@ -579,36 +478,6 @@ public actor OIDCClient: OIDCProvider {
         )
     }
 
-    private func validateHTTPS(_ url: URL) throws {
-        // Reject non-HTTPS endpoints when required.
-        guard !self.configuration.requireHTTPS || url.scheme == "https" else {
-            throw OIDCError.insecureEndpoint(url)
-        }
-    }
-
-    private static func formEncode(_ value: String) -> String {
-        // Percent-encode using the unreserved character set.
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~")
-        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
-    }
-
-    private static func decodeHeader(_ token: String) throws -> IDTokenHeader {
-        // Split the JWT and decode the first segment.
-        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3 else {
-            throw OIDCError.invalidIDToken("Malformed JWT.")
-        }
-        guard let data = Data(base64URLEncoded: String(parts[0])) else {
-            throw OIDCError.invalidIDToken("Malformed JWT header.")
-        }
-        do {
-            return try JSONDecoder().decode(IDTokenHeader.self, from: data)
-        } catch {
-            throw OIDCError.invalidIDToken("Unable to decode the JWT header: \(error)")
-        }
-    }
-
     private static func verifyAccessTokenHash(
         _ atHash: String,
         accessToken: String,
@@ -632,13 +501,4 @@ public actor OIDCClient: OIDCProvider {
         let expected = Data(digest.prefix(digest.count / 2)).base64URLEncodedString()
         return atHash == expected
     }
-}
-
-private struct IDTokenHeader: Decodable {
-    let alg: String
-    let kid: String?
-    let x5u: String?
-    let x5c: [String]?
-    let jku: String?
-    let jwk: OIDCClaimValue?
 }

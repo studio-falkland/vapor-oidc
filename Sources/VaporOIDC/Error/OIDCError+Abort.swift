@@ -10,7 +10,8 @@ extension OIDCError: AbortError {
             return .badRequest
         case .authorizationFailed, .nonceMismatch, .audienceMismatch, .tokenExpired,
              .invalidIDToken, .userInfoSubjectMismatch, .unsupportedAlgorithm,
-             .invalidAccessToken, .inactiveAccessToken, .unsupportedTokenFormat:
+             .invalidAccessToken, .inactiveAccessToken, .unsupportedTokenFormat,
+             .invalidTokenHeader, .invalidTokenTime:
             return .unauthorized
         case .insufficientScope:
             return .forbidden
@@ -19,7 +20,7 @@ extension OIDCError: AbortError {
             return .badGateway
         case .invalidDiscoveryDocument, .issuerMismatch, .missingIDToken,
              .pkceUnsupported, .sessionUnavailable, .missingIntrospectionEndpoint,
-             .missingIntrospectionCredentials:
+             .missingIntrospectionCredentials, .missingClientSecret:
             return .internalServerError
         }
     }

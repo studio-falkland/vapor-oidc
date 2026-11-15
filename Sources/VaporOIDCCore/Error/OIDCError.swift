@@ -89,6 +89,15 @@ public enum OIDCError: Error, Sendable, Equatable {
 
     /// The access token format is not supported.
     case unsupportedTokenFormat
+
+    /// The JWT header is invalid or uses unsupported parameters.
+    case invalidTokenHeader(String)
+
+    /// A time-based token claim is invalid.
+    case invalidTokenTime(String)
+
+    /// The client secret required for authentication is missing.
+    case missingClientSecret
 }
 
 extension OIDCError: LocalizedError {
@@ -150,6 +159,12 @@ extension OIDCError: LocalizedError {
             return "The OIDC access token is missing the \(required) scope. Granted: \(granted.sorted().joined(separator: " "))"
         case .unsupportedTokenFormat:
             return "The OIDC access token format is not supported."
+        case .invalidTokenHeader(let reason):
+            return "Invalid OIDC token header: \(reason)"
+        case .invalidTokenTime(let reason):
+            return "Invalid OIDC token time: \(reason)"
+        case .missingClientSecret:
+            return "The OIDC client secret is missing."
         }
     }
 }
