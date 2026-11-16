@@ -18,8 +18,31 @@ jobs:
       - name: Show Swift version
         run: swift --version
 
-      - name: Test
-        run: swift test --configuration debug 2>&1
+      - name: Test with coverage
+        run: swift test --configuration debug --enable-code-coverage 2>&1
+
+      - name: Coverage report
+        run: |
+          xcrun llvm-cov report \
+            -instr-profile .build/debug/codecov/default.profdata \
+            -object .build/debug/VaporOIDCCoreTests.xctest/Contents/MacOS/VaporOIDCCoreTests \
+            -object .build/debug/VaporOIDCTests.xctest/Contents/MacOS/VaporOIDCTests \
+            -ignore-filename-regex '(^|/)(Tests|\.build)/' \
+            | tee coverage.txt
+
+          {
+            echo "## Coverage"
+            echo
+            echo '```'
+            cat coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.txt
 
   build-linux:
     name: Build & Test (Linux)

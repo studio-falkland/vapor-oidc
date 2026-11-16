@@ -85,6 +85,33 @@ normative specs win:
 - `swift test`
 - `swift build` only when diagnostics and tests can't answer.
 
+## Coverage
+
+Run the suite with instrumentation, then generate a per-file report:
+
+```bash
+swift test --enable-code-coverage
+
+xcrun llvm-cov report \
+  -instr-profile .build/debug/codecov/default.profdata \
+  -object .build/debug/VaporOIDCCoreTests.xctest/Contents/MacOS/VaporOIDCCoreTests \
+  -object .build/debug/VaporOIDCTests.xctest/Contents/MacOS/VaporOIDCTests \
+  -ignore-filename-regex '(^|/)(Tests|\.build)/'
+```
+
+The report reads the default `.build/debug` build directory. The
+`-ignore-filename-regex` keeps it to package sources by excluding the test
+targets and `.build`. If you need the JSON export (for Codecov or another
+service), `swift test --show-codecov-path` prints its path.
+
+CI runs the same report in the macOS job, writes it to the job summary, and
+uploads `coverage.txt` as the `coverage` artifact. The Linux job remains a build
+and test smoke check. No coverage threshold is enforced.
+
+Coverage is a guide, not a goal. The critical paths are the ID Token validation
+matrix, UserInfo subject binding, state handling, and resource-server token
+checks. Keep those at full branch coverage.
+
 ## Scope boundaries
 
 v1 implements the Authorization Code Flow with PKCE `S256`, `state`, `nonce`,
