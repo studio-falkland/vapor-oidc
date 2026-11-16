@@ -16,6 +16,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.14.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0"),
         .package(url: "https://github.com/apple/swift-http-types.git", from: "1.7.0"),
+        .package(url: "https://github.com/swift-extras/swift-extras-base64.git", from: "1.2.0"),
     ],
     targets: [
         .target(
@@ -24,6 +25,8 @@ let package = Package(
                 .product(name: "JWTKit", package: "jwt-kit"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "Vapor", package: "vapor"),
+                .product(name: "ExtrasBase64", package: "swift-extras-base64"),
             ]
         ),
         .target(

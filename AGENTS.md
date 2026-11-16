@@ -24,8 +24,8 @@ normative specs win:
 
 ## Architecture
 
-- Products: `VaporOIDCCore` (no Vapor import) and `VaporOIDC` (Vapor adapter,
-  re-exports the core).
+- Products: `VaporOIDCCore` (depends on Vapor only for `URLEncodedFormEncoder`)
+  and `VaporOIDC` (Vapor adapter, re-exports the core).
 - `OIDCProvider` is the protocol. `OIDCClient` is the production actor.
   `FakeOIDCProvider` and `MockOIDCHTTPClient` live in `Testing/`.
 - `OIDC<User>` owns the provider, resolver, state store, session, and routes.

@@ -311,7 +311,7 @@ public actor OIDCClient: OIDCProvider {
             method: "POST",
             url: discovery.tokenEndpoint,
             headers: headers,
-            body: OIDCFormRequest.encode(body)
+            body: try OIDCFormRequest.encode(body)
         )
     }
 
@@ -360,7 +360,7 @@ public actor OIDCClient: OIDCProvider {
             clockSkew: skew
         )
         try OIDCClaimValidation.validateIssuedAt(
-            claims.issuedAt?.value,
+            claims.issuedAt.value,
             clockSkew: skew
         )
         try OIDCClaimValidation.validateNotBefore(

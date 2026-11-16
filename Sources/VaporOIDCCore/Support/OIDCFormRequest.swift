@@ -3,14 +3,13 @@ import FoundationEssentials
 #else
 import Foundation
 #endif
+import Vapor
 
 /// Shared form encoding and client authentication for token requests.
 enum OIDCFormRequest {
     /// Form-encodes a request body.
-    static func encode(_ body: [String: String]) -> Data {
-        let encoded = body
-            .map { "\(formEncode($0.key))=\(formEncode($0.value))" }
-            .joined(separator: "&")
+    static func encode(_ body: [String: String]) throws -> Data {
+        let encoded = try URLEncodedFormEncoder().encode(body)
         return Data(encoded.utf8)
     }
 
@@ -36,11 +35,5 @@ enum OIDCFormRequest {
         case .none:
             break
         }
-    }
-
-    private static func formEncode(_ value: String) -> String {
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~")
-        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 }

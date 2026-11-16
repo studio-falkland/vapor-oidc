@@ -54,6 +54,11 @@ public actor FakeOIDCProvider: OIDCProvider {
         self.logoutURLResult = nil
     }
 
+    /// Sets the logout URL returned by ``logoutURL(idToken:postLogoutRedirectURI:)``.
+    public func setLogoutURLResult(_ url: URL?) {
+        self.logoutURLResult = url
+    }
+
     public func discovery() async throws -> OIDCDiscovery {
         try self.discoveryResult.get()
     }

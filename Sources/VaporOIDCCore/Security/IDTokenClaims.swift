@@ -11,7 +11,7 @@ struct IDTokenClaims: JWTPayload {
     var subject: SubjectClaim
     var audience: AudienceClaim
     var expiration: ExpirationClaim
-    var issuedAt: IssuedAtClaim?
+    var issuedAt: IssuedAtClaim
     var notBefore: NotBeforeClaim?
     var nonce: String?
     var authorizedParty: String?

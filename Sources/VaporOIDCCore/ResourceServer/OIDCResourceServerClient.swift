@@ -240,7 +240,7 @@ public actor OIDCResourceServerClient: OIDCAccessTokenValidator {
             method: "POST",
             url: endpoint,
             headers: headers,
-            body: OIDCFormRequest.encode(body)
+            body: try OIDCFormRequest.encode(body)
         )
     }
 
