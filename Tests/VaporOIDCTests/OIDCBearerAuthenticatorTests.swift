@@ -163,4 +163,50 @@ struct OIDCBearerAuthenticatorTests {
             }
         }
     }
+
+    @Test
+    func rejectsUnknownUser() async throws {
+        let validator = FakeAccessTokenValidator(
+            result: .success(self.accessToken())
+        )
+        let resource = OIDCResourceServer<BearerUser>(
+            configuration: self.configuration(),
+            validator: validator,
+            resolver: .init { _, _ in nil }
+        )
+
+        try await withApp { app in
+            let protected = app.grouped(resource.bearerAuthenticator)
+            protected.get("me") { request in
+                try request.auth.require(BearerUser.self).subject
+            }
+
+            try await app.testing { client in
+                var headers = HTTPFields()
+                headers[.authorization] = "Bearer token"
+                let response = try await client.get("me", headers: headers)
+                #expect(response.status == .unauthorized)
+            }
+        }
+    }
+
+    @Test
+    func registersProtectedResourceMetadata() async throws {
+        let resource = self.makeResourceServer(
+            validator: FakeAccessTokenValidator(
+                result: .success(self.accessToken())
+            )
+        )
+
+        try await withApp { app in
+            try await app.register(collection: resource)
+
+            try await app.testing { client in
+                let response = try await client.get(
+                    ".well-known/oauth-protected-resource"
+                )
+                #expect(response.status == .ok)
+            }
+        }
+    }
 }

@@ -63,7 +63,10 @@ struct OIDCLoginTests {
         )
     }
 
-    private func makeOIDC() -> OIDC<TestUser> {
+    private func makeOIDC(
+        options: OIDCOptions = .init(),
+        stateStore: any OIDCStateStore = SessionOIDCStateStore()
+    ) -> OIDC<TestUser> {
         let provider = FakeOIDCProvider(
             configuration: self.configuration(),
             discovery: self.discovery(),
@@ -78,8 +81,34 @@ struct OIDCLoginTests {
                 restore: { subject, _ in
                     TestUser(subject: subject.subject)
                 }
-            )
+            ),
+            options: options,
+            stateStore: stateStore
         )
+    }
+
+    private func login(
+        _ client: any TestClient,
+        query: String = ""
+    ) async throws -> (cookie: String, state: String) {
+        // Start the flow and capture the session cookie and state value.
+        let response = try await client.get(URI(string: "auth/login\(query)"))
+        let cookies = try #require(response.headers.setCookie)
+        let cookie = try #require(cookies["vapor-session"])
+        let location = try #require(response.headers[.location])
+        let state = try #require(
+            URLComponents(string: location)?
+                .queryItems?
+                .first(where: { $0.name == "state" })?
+                .value
+        )
+        return (cookie.string, state)
+    }
+
+    private func callbackHeaders(_ cookie: String) -> HTTPFields {
+        var headers = HTTPFields()
+        headers[.cookie] = "vapor-session=\(cookie)"
+        return headers
     }
 
     @Test
@@ -171,6 +200,146 @@ struct OIDCLoginTests {
 
                 #expect(callback.status == .seeOther)
                 #expect(callback.headers[.location] == "/")
+            }
+        }
+    }
+
+    @Test
+    func callbackRejectsProviderError() async throws {
+        let oidc = self.makeOIDC()
+
+        try await withApp { app in
+            app.middleware.use(app.sessionsMiddleware)
+            app.middleware.use(oidc.sessionAuthenticator)
+            try await app.grouped("auth").register(collection: oidc)
+
+            try await app.testing { client in
+                let response = try await client.get(
+                    "auth/callback?error=access_denied&error_description=denied"
+                )
+                #expect(response.status == .unauthorized)
+            }
+        }
+    }
+
+    @Test
+    func callbackRejectsMissingCode() async throws {
+        let oidc = self.makeOIDC()
+
+        try await withApp { app in
+            app.middleware.use(app.sessionsMiddleware)
+            app.middleware.use(oidc.sessionAuthenticator)
+            try await app.grouped("auth").register(collection: oidc)
+
+            try await app.testing { client in
+                let response = try await client.get(
+                    "auth/callback?state=anything"
+                )
+                #expect(response.status == .badRequest)
+            }
+        }
+    }
+
+    @Test
+    func callbackRejectsMissingState() async throws {
+        let oidc = self.makeOIDC()
+
+        try await withApp { app in
+            app.middleware.use(app.sessionsMiddleware)
+            app.middleware.use(oidc.sessionAuthenticator)
+            try await app.grouped("auth").register(collection: oidc)
+
+            try await app.testing { client in
+                let response = try await client.get("auth/callback?code=code")
+                #expect(response.status == .badRequest)
+            }
+        }
+    }
+
+    @Test
+    func callbackRejectsUnknownState() async throws {
+        let oidc = self.makeOIDC()
+
+        try await withApp { app in
+            app.middleware.use(app.sessionsMiddleware)
+            app.middleware.use(oidc.sessionAuthenticator)
+            try await app.grouped("auth").register(collection: oidc)
+
+            try await app.testing { client in
+                let response = try await client.get(
+                    "auth/callback?code=code&state=unknown"
+                )
+                #expect(response.status == .badRequest)
+            }
+        }
+    }
+
+    @Test
+    func callbackRejectsReplayedState() async throws {
+        let oidc = self.makeOIDC()
+
+        try await withApp { app in
+            app.middleware.use(app.sessionsMiddleware)
+            app.middleware.use(oidc.sessionAuthenticator)
+            try await app.grouped("auth").register(collection: oidc)
+
+            try await app.testing { client in
+                let login = try await self.login(client)
+                let headers = self.callbackHeaders(login.cookie)
+
+                let first = try await client.get(
+                    "auth/callback?code=code&state=\(login.state)",
+                    headers: headers
+                )
+                #expect(first.status == .seeOther)
+
+                let second = try await client.get(
+                    "auth/callback?code=code&state=\(login.state)",
+                    headers: headers
+                )
+                #expect(second.status == .badRequest)
+            }
+        }
+    }
+
+    @Test
+    func callbackRejectsExpiredState() async throws {
+        let oidc = self.makeOIDC(
+            stateStore: SessionOIDCStateStore(maximumAge: -1)
+        )
+
+        try await withApp { app in
+            app.middleware.use(app.sessionsMiddleware)
+            app.middleware.use(oidc.sessionAuthenticator)
+            try await app.grouped("auth").register(collection: oidc)
+
+            try await app.testing { client in
+                let login = try await self.login(client)
+                let response = try await client.get(
+                    "auth/callback?code=code&state=\(login.state)",
+                    headers: self.callbackHeaders(login.cookie)
+                )
+                #expect(response.status == .badRequest)
+            }
+        }
+    }
+
+    @Test
+    func callbackRejectsIssuerMismatch() async throws {
+        let oidc = self.makeOIDC()
+
+        try await withApp { app in
+            app.middleware.use(app.sessionsMiddleware)
+            app.middleware.use(oidc.sessionAuthenticator)
+            try await app.grouped("auth").register(collection: oidc)
+
+            try await app.testing { client in
+                let login = try await self.login(client)
+                let response = try await client.get(
+                    "auth/callback?code=code&state=\(login.state)&iss=https://evil.example",
+                    headers: self.callbackHeaders(login.cookie)
+                )
+                #expect(response.status == .internalServerError)
             }
         }
     }

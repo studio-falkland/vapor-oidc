@@ -42,6 +42,55 @@ struct OIDCScopeMiddlewareTests {
             }
         }
     }
+
+    @Test
+    func rejectsMissingToken() async throws {
+        try await withApp { app in
+            let group = app.grouped(OIDCScopeMiddleware("mcp:tools"))
+            group.get("tools") { _ in "ok" }
+
+            try await app.testing { client in
+                let response = try await client.get("tools")
+                #expect(response.status == .unauthorized)
+            }
+        }
+    }
+
+    @Test
+    func requireScopeAllowsGrantedScope() async throws {
+        try await withApp { app in
+            let group = app.grouped(
+                FakeBearerMiddleware(scopes: ["mcp:tools"])
+            )
+            group.get("tools") { request in
+                try request.requireScope("mcp:tools")
+                return "ok"
+            }
+
+            try await app.testing { client in
+                let response = try await client.get("tools")
+                #expect(response.status == .ok)
+            }
+        }
+    }
+
+    @Test
+    func requireScopeRejectsMissingScope() async throws {
+        try await withApp { app in
+            let group = app.grouped(
+                FakeBearerMiddleware(scopes: ["mcp:read"])
+            )
+            group.get("tools") { request in
+                try request.requireScope("mcp:tools")
+                return "ok"
+            }
+
+            try await app.testing { client in
+                let response = try await client.get("tools")
+                #expect(response.status == .forbidden)
+            }
+        }
+    }
 }
 
 private struct FakeBearerMiddleware: Middleware {

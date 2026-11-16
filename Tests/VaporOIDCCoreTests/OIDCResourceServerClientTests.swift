@@ -42,6 +42,7 @@ struct OIDCResourceServerClientTests {
     private func claims(
         audience: [String] = ["https://mcp.example.com"],
         expiration: Date = Date().addingTimeInterval(300),
+        notBefore: Date? = nil,
         scope: String? = "mcp:tools mcp:read",
         scp: [String]? = nil
     ) -> OIDCAccessTokenClaims {
@@ -51,11 +52,35 @@ struct OIDCResourceServerClientTests {
             audience: AudienceClaim(value: audience),
             expiration: ExpirationClaim(value: expiration),
             issuedAt: IssuedAtClaim(value: Date()),
-            notBefore: nil,
+            notBefore: notBefore.map { NotBeforeClaim(value: $0) },
             clientID: "client",
             scope: scope,
             scp: scp,
             jwtID: "jti"
+        )
+    }
+
+    private func introspection(
+        active: Bool = true,
+        sub: String? = "123",
+        aud: OIDCIntrospectionResponse.AudienceValue? = .string("https://mcp.example.com"),
+        iss: String? = "https://issuer.example",
+        exp: Int? = nil
+    ) -> OIDCIntrospectionResponse {
+        OIDCIntrospectionResponse(
+            active: active,
+            scope: "mcp:tools",
+            scp: nil,
+            clientID: "client",
+            username: nil,
+            tokenType: "Bearer",
+            exp: exp,
+            iat: nil,
+            nbf: nil,
+            sub: sub,
+            aud: aud,
+            iss: iss,
+            jti: nil
         )
     }
 
@@ -269,16 +294,136 @@ struct OIDCResourceServerClientTests {
         }
     }
 
+    @Test
+    func rejectsNotBeforeInFuture() async throws {
+        let (client, token) = try await self.makeClient(
+            claims: self.claims(notBefore: Date().addingTimeInterval(600))
+        )
+        await #expect(
+            throws: OIDCError.invalidTokenTime("The token is not valid yet.")
+        ) {
+            _ = try await client.validate(token)
+        }
+    }
+
+    @Test
+    func rejectsOpaqueTokenInJWTMode() async throws {
+        let (client, _) = try await self.makeClient(
+            claims: self.claims(),
+            tokenValidation: .jwt
+        )
+        await #expect(throws: OIDCError.self) {
+            _ = try await client.validate("opaque-token")
+        }
+    }
+
+    @Test
+    func rejectsIntrospectionWithoutSubject() async throws {
+        let (client, _) = try await self.makeIntrospectionClient(
+            response: self.introspection(sub: nil)
+        )
+        await #expect(
+            throws: OIDCError.invalidAccessToken(
+                "The introspection response is missing the sub claim."
+            )
+        ) {
+            _ = try await client.validate("opaque-token")
+        }
+    }
+
+    @Test
+    func rejectsIntrospectionAudienceMismatch() async throws {
+        let (client, _) = try await self.makeIntrospectionClient(
+            response: self.introspection(aud: .string("https://other.example"))
+        )
+        await #expect(throws: OIDCError.audienceMismatch) {
+            _ = try await client.validate("opaque-token")
+        }
+    }
+
+    @Test
+    func rejectsIntrospectionIssuerMismatch() async throws {
+        let (client, _) = try await self.makeIntrospectionClient(
+            response: self.introspection(iss: "https://evil.example")
+        )
+        await #expect(
+            throws: OIDCError.issuerMismatch(
+                expected: "https://issuer.example",
+                actual: "https://evil.example"
+            )
+        ) {
+            _ = try await client.validate("opaque-token")
+        }
+    }
+
+    @Test
+    func rejectsIntrospectionExpired() async throws {
+        let (client, _) = try await self.makeIntrospectionClient(
+            response: self.introspection(
+                exp: Int(Date().addingTimeInterval(-3600).timeIntervalSince1970)
+            )
+        )
+        await #expect(throws: OIDCError.tokenExpired) {
+            _ = try await client.validate("opaque-token")
+        }
+    }
+
+    @Test
+    func rejectsMissingIntrospectionEndpoint() async throws {
+        let discovery = OIDCDiscovery(
+            issuer: "https://issuer.example",
+            authorizationEndpoint: URL(string: "https://issuer.example/authorize")!,
+            tokenEndpoint: URL(string: "https://issuer.example/token")!,
+            jwksURI: URL(string: "https://issuer.example/jwks")!
+        )
+        let discoveryData = try JSONEncoder().encode(discovery)
+        let http = MockOIDCHTTPClient()
+        await http.setResponse(
+            OIDCHTTPResponse(statusCode: 200, body: discoveryData),
+            for: self.discoveryURL
+        )
+        let client = OIDCResourceServerClient(
+            configuration: self.configuration(tokenValidation: .introspection),
+            httpClient: http
+        )
+
+        await #expect(throws: OIDCError.missingIntrospectionEndpoint) {
+            _ = try await client.validate("opaque-token")
+        }
+    }
+
+    @Test
+    func rejectsMissingIntrospectionCredentials() async throws {
+        let discovery = self.discovery()
+        let discoveryData = try JSONEncoder().encode(discovery)
+        let http = MockOIDCHTTPClient()
+        await http.setResponse(
+            OIDCHTTPResponse(statusCode: 200, body: discoveryData),
+            for: self.discoveryURL
+        )
+        let configuration = OIDCResourceServerConfiguration(
+            issuer: URL(string: "https://issuer.example")!,
+            audience: "https://mcp.example.com",
+            tokenValidation: .introspection
+        )
+        let client = OIDCResourceServerClient(
+            configuration: configuration,
+            httpClient: http
+        )
+
+        await #expect(throws: OIDCError.missingIntrospectionCredentials) {
+            _ = try await client.validate("opaque-token")
+        }
+    }
+
     private static func jwk(
         from privateKey: P256.Signing.PrivateKey,
         kid: String
     ) throws -> JWK {
-        let d = privateKey.rawRepresentation
-            .base64EncodedString()
-            .base64URLEscaped()
+        let d = privateKey.rawRepresentation.base64URLEncodedString()
         let publicKey = try ES256PublicKey(backing: privateKey.publicKey)
-        guard let x = publicKey.parameters?.x.base64URLEscaped(),
-              let y = publicKey.parameters?.y.base64URLEscaped() else {
+        guard let x = publicKey.parameters?.x,
+              let y = publicKey.parameters?.y else {
             throw OIDCError.invalidAccessToken("Unable to derive the public key coordinates.")
         }
         return JWK.ecdsa(
@@ -289,14 +434,5 @@ struct OIDCResourceServerClientTests {
             curve: .p256,
             privateKey: d
         )
-    }
-}
-
-private extension String {
-    func base64URLEscaped() -> String {
-        self
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
     }
 }

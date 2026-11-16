@@ -33,4 +33,21 @@ struct OIDCClaimsTests {
         #expect(claims.object("address")?["country"] == .string("NL"))
         #expect(claims["missing"] == .null)
     }
+
+    @Test
+    func roundTripsAllClaimValueKinds() throws {
+        let claims = OIDCClaims([
+            "string": .string("value"),
+            "number": .number(1.5),
+            "bool": .bool(true),
+            "array": .array([.string("a"), .number(2)]),
+            "object": .object(["nested": .bool(false)]),
+            "null": .null,
+        ])
+
+        let data = try JSONEncoder().encode(claims)
+        let decoded = try JSONDecoder().decode(OIDCClaims.self, from: data)
+
+        #expect(decoded == claims)
+    }
 }
