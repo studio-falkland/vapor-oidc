@@ -3,6 +3,7 @@ import FoundationEssentials
 #else
 import Foundation
 #endif
+import Logging
 import Testing
 @testable import VaporOIDCCore
 
@@ -37,5 +38,30 @@ struct OIDCDiscoveryTests {
         #expect(discovery.jwksURI.absoluteString == "https://issuer.example/jwks")
         #expect(discovery.endSessionEndpoint?.absoluteString == "https://issuer.example/logout")
         #expect(discovery.codeChallengeMethodsSupported == ["S256"])
+    }
+
+    @Test
+    func wrapsTransportErrorsWithTheDiscoveryURL() async throws {
+        let http = MockOIDCHTTPClient()
+        await http.setError(.networkError("inflationError(-3)"))
+        let loader = OIDCDiscoveryLoader(
+            issuer: URL(string: "https://issuer.example")!,
+            discoveryURL: nil,
+            requireHTTPS: true,
+            httpClient: http,
+            logger: Logger(label: "test")
+        )
+
+        do {
+            _ = try await loader.load()
+            Issue.record("Expected load() to throw")
+        } catch let error as OIDCError {
+            guard case .networkError(let message) = error else {
+                Issue.record("Expected a networkError, got \(error)")
+                return
+            }
+            #expect(message.contains("https://issuer.example/.well-known/openid-configuration"))
+            #expect(message.contains("inflationError(-3)"))
+        }
     }
 }

@@ -39,10 +39,17 @@ actor OIDCDiscoveryLoader {
             ?? self.issuer.appendingPathComponent(".well-known/openid-configuration")
         try OIDCClaimValidation.requireHTTPS(url, enabled: self.requireHTTPS)
 
-        // Fetch and decode the document.
-        let response = try await self.httpClient.send(
-            OIDCHTTPRequest(method: "GET", url: url)
-        )
+        // Fetch the document, naming the URL when the transport fails.
+        let response: OIDCHTTPResponse
+        do {
+            response = try await self.httpClient.send(
+                OIDCHTTPRequest(method: "GET", url: url)
+            )
+        } catch {
+            throw OIDCError.networkError(
+                "Failed to fetch the discovery document from \(url.absoluteString): \(error)"
+            )
+        }
         guard response.statusCode == 200 else {
             throw OIDCError.discoveryFailed(
                 statusCode: response.statusCode,

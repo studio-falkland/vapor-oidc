@@ -25,6 +25,13 @@ public struct VaporOIDCHTTPClient: OIDCHTTPClient {
             }
         }
 
+        // Ask for an uncompressed body unless the caller chose an encoding.
+        // The transport's decompressor only understands zlib and gzip, but some
+        // providers send raw deflate, which fails with inflationError(-3).
+        if headers[.acceptEncoding] == nil {
+            headers[.acceptEncoding] = "identity"
+        }
+
         // Build and send the Vapor client request.
         let clientRequest = ClientRequest(
             method: HTTPRequest.Method(request.method) ?? .get,

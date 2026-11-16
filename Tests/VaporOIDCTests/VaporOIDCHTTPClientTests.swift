@@ -64,5 +64,26 @@ struct VaporOIDCHTTPClientTests {
             requests.first?.headers[.contentType]
                 == "application/x-www-form-urlencoded"
         )
+        #expect(requests.first?.headers[.acceptEncoding] == "identity")
+    }
+
+    @Test
+    func preservesCallerSuppliedAcceptEncoding() async throws {
+        let recorder = RequestRecorder()
+        let response = ClientResponse(status: .ok, body: .init(data: Data()))
+        let client = VaporOIDCHTTPClient(
+            client: StubClient(response: response, recorder: recorder)
+        )
+
+        _ = try await client.send(
+            OIDCHTTPRequest(
+                method: "GET",
+                url: URL(string: "https://issuer.example/jwks")!,
+                headers: ["Accept-Encoding": "gzip"]
+            )
+        )
+
+        let requests = await recorder.requests
+        #expect(requests.first?.headers[.acceptEncoding] == "gzip")
     }
 }
